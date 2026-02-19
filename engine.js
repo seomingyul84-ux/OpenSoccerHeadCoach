@@ -1,4 +1,4 @@
-// 1. 전술 데이터 초기화
+// 1. 전술 및 스탯 설정
 window.tactics = {
     attack: { passing_way: 1, tempo: 1, width: 4, transition: 1, creativity: 4, time_wasting: 2, set_piece: 1, dribble_focus: 1, patience: 7, long_shot: 1, cross_style: 1, participation: 4, advance: 4, passing_target: 1 },
     buildup: { tactic_intensity: 7, goal_kick_length: 1, gk_dist_speed: 7 },
@@ -6,99 +6,136 @@ window.tactics = {
     defense_priority: { type: "Box", intensity: 7 }
 };
 
-// 2. 에러 해결용 전역 함수 (updatePriorityInt 등)
+// 모든 선수 기본 스탯 (유저 요청: 75 고정)
+const BASE_STATS = { vision: 75, passing: 75, finishing: 75, positioning: 75, aggression: 75 };
+
+// 2. UI 연결 (window에 확실히 바인딩)
 window.updateVal = (cat, key, val) => {
     window.tactics[cat][key] = parseInt(val);
-    const el = document.getElementById(`${cat}-${key}-val`);
-    if(el) el.innerText = val;
+    const label = document.getElementById(`${cat}-${key}-val`);
+    if(label) label.innerText = val;
 };
-window.updatePriorityType = (val) => { window.tactics.defense_priority.type = val; };
 window.updatePriorityInt = (val) => { window.tactics.defense_priority.intensity = parseInt(val); };
+window.updatePriorityType = (val) => { window.tactics.defense_priority.type = val; };
 
-// 3. 물리 엔진 변수
-let ball = { x: 350, y: 225, vx: 2, vy: 2 };
+// 3. 물리 엔진
+let ball = { x: 350, y: 225, vx: 0, vy: 0, owner: null };
 let players = [];
 
 class Player {
     constructor(id, x, y, team, isGK = false) {
-        this.id = id;
-        this.homeX = x; // 원래 위치
-        this.homeY = y;
-        this.x = x;
-        this.y = y;
-        this.team = team;
-        this.isGK = isGK;
+        this.id = id; this.homeX = x; this.homeY = y;
+        this.x = x; this.y = y; this.team = team; this.isGK = isGK;
+        this.state = "IDLE";
+    }
+
+    // [맥 알리스터 예시 스탯 기반 AI 로직]
+    decide() {
+        const distToBall = Math.hypot(ball.x - this.x, ball.y - this.y);
+        
+        // 1. 내가 공을 가졌을 때 (공격 AI)
+        if (ball.owner === this) {
+            // 참을성(patience)이 높으면 슛보다 패스 길을 더 찾음
+            const shootChance = Math.random() * 100;
+            const shootThreshold = 95 - (window.tactics.attack.patience * 2);
+
+            if (this.x > 500 && shootChance > shootThreshold) {
+                this.action("SHOOT");
+            } else {
+                this.action("PASS");
+            }
+        } 
+        // 2. 수비 시 (수비 AI)
+        else {
+            const pressLimit = window.tactics.defense.press_line * 40;
+            if (distToBall < pressLimit) {
+                this.state = "PRESSING";
+            } else {
+                this.state = "RETURNING";
+            }
+        }
+    }
+
+    action(type) {
+        if (type === "PASS") {
+            ball.owner = null;
+            ball.vx = (this.team === 'A' ? 5 : -5) + (Math.random() - 0.5) * 4;
+            ball.vy = (Math.random() - 0.5) * 4;
+        } else if (type === "SHOOT") {
+            ball.owner = null;
+            ball.vx = (this.team === 'A' ? 12 : -12);
+            ball.vy = (Math.random() - 0.5) * 2;
+        }
     }
 
     update() {
-        const distToBall = Math.hypot(ball.x - this.x, ball.y - this.y);
-        const distToHome = Math.hypot(this.homeX - this.x, this.homeY - this.y);
+        this.decide();
 
-        // [진형 유지 시스템] 공이 멀면 집으로 돌아가려는 힘
-        const homeForce = distToHome * 0.05;
-        this.x += (this.homeX - this.x) * 0.05;
-        this.y += (this.homeY - this.y) * 0.05;
-
-        // [압박 시스템] 전술 수치에 따른 공 추적
-        const pressLimit = window.tactics.defense.press_line * 35;
-        if (distToBall < pressLimit && !this.isGK) {
-            const speed = (window.tactics.defense.press_frequency / 7) * 1.5;
-            this.x += (ball.x - this.x) * 0.02 * speed;
-            this.y += (ball.y - this.y) * 0.02 * speed;
+        if (this.state === "PRESSING") {
+            this.x += (ball.x - this.x) * 0.04;
+            this.y += (ball.y - this.y) * 0.04;
+        } else {
+            // 자기 자리로 돌아가기 (경직 해제를 위해 부드럽게 복귀)
+            this.x += (this.homeX - this.x) * 0.02;
+            this.y += (this.homeY - this.y) * 0.02;
         }
 
-        // [충돌 방지] 선수들끼리 겹치지 않게 밀어내기 (한 점으로 모이는 것 방지)
-        players.forEach(other => {
-            if (other.id !== this.id) {
-                const d = Math.hypot(this.x - other.x, this.y - other.y);
-                if (d < 20) { // 20px 이내면 서로 밀어냄
-                    this.x += (this.x - other.x) * 0.1;
-                    this.y += (this.y - other.y) * 0.1;
-                }
+        // 공 소유 판정
+        const distToBall = Math.hypot(ball.x - this.x, ball.y - this.y);
+        if (distToBall < 10) ball.owner = this;
+
+        // 선수 간 충돌 방지 (겹침 해결)
+        players.forEach(p => {
+            if(p === this) return;
+            const d = Math.hypot(this.x - p.x, this.y - p.y);
+            if(d < 15) {
+                this.x += (this.x - p.x) * 0.1;
+                this.y += (this.y - p.y) * 0.1;
             }
         });
-
-        // 공 차기
-        if (distToBall < 15) {
-            ball.vx = (Math.random() - 0.5) * 15;
-            ball.vy = (Math.random() - 0.5) * 15;
-        }
     }
 
     draw(ctx) {
         ctx.fillStyle = this.isGK ? "#FFD700" : (this.team === 'A' ? "#2196F3" : "#F44336");
         ctx.beginPath(); ctx.arc(this.x, this.y, 8, 0, Math.PI*2); ctx.fill();
-        ctx.fillStyle = "white"; ctx.font = "10px Arial";
-        ctx.fillText(this.isGK ? "GK" : "75", this.x-7, this.y-12);
+        if (ball.owner === this) { // 공 가진 선수 표시
+            ctx.strokeStyle = "yellow"; ctx.lineWidth = 3; ctx.stroke();
+        }
     }
 }
 
-// 4. 초기화 및 루프
+// 4. 메인 루프 및 초기화
 function setup() {
     players = [];
-    // A팀 (파란색)
+    // A팀 진형 (4-4-2)
     players.push(new Player(0, 50, 225, 'A', true));
-    for(let i=1; i<=10; i++) players.push(new Player(i, 150 + (i%3)*50, 40*i, 'A'));
-    // B팀 (빨간색)
+    const formA = [[150,100],[150,200],[150,300],[150,400],[300,100],[300,200],[300,300],[300,400],[500,150],[500,300]];
+    formA.forEach((pos, i) => players.push(new Player(i+1, pos[0], pos[1], 'A')));
+    
+    // B팀 진형 (대칭)
     players.push(new Player(11, 650, 225, 'B', true));
-    for(let i=1; i<=10; i++) players.push(new Player(i+11, 550 - (i%3)*50, 40*i, 'B'));
+    formA.forEach((pos, i) => players.push(new Player(i+12, 700-pos[0], pos[1], 'B')));
 }
 
 const canvas = document.getElementById('field');
-if(canvas) {
-    const ctx = canvas.getContext('2d');
-    function loop() {
-        ctx.fillStyle = "#2c5e2e"; ctx.fillRect(0,0,700,450);
-        ctx.strokeStyle = "white"; ctx.strokeRect(0,0,700,450);
-        
-        ball.x += ball.vx; ball.y += ball.vy;
-        if(ball.x < 0 || ball.x > 700) ball.vx *= -1;
-        if(ball.y < 0 || ball.y > 450) ball.vy *= -1;
-        ball.vx *= 0.98; ball.vy *= 0.98;
+const ctx = canvas.getContext('2d');
 
-        ctx.fillStyle = "white"; ctx.beginPath(); ctx.arc(ball.x, ball.y, 5, 0, Math.PI*2); ctx.fill();
-        players.forEach(p => { p.update(); p.draw(ctx); });
-        requestAnimationFrame(loop);
+function loop() {
+    ctx.fillStyle = "#2c5e2e"; ctx.fillRect(0,0,700,450);
+    ctx.strokeStyle = "white"; ctx.strokeRect(0,0,700,450);
+
+    if (!ball.owner) {
+        ball.x += ball.vx; ball.y += ball.vy;
+        ball.vx *= 0.98; ball.vy *= 0.98;
+        if(ball.x<0 || ball.x>700) ball.vx *= -1;
+        if(ball.y<0 || ball.y>450) ball.vy *= -1;
+    } else {
+        ball.x = ball.owner.x; ball.y = ball.owner.y;
     }
-    setup(); loop();
+
+    ctx.fillStyle = "white"; ctx.beginPath(); ctx.arc(ball.x, ball.y, 5, 0, Math.PI*2); ctx.fill();
+    players.forEach(p => { p.update(); p.draw(ctx); });
+    requestAnimationFrame(loop);
 }
+
+setup(); loop();
