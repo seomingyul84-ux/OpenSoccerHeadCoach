@@ -1,87 +1,89 @@
-// 1. 유저님의 TacticalEngine을 JS로 이식
-const tactics = {
-    attack: {
-        passing_way: 1, tempo: 1, width: 4, transition: 1, creativity: 4,
-        time_wasting: 2, set_piece: 1, dribble_focus: 1, patience: 7,
-        long_shot: 1, cross_style: 1, participation: 4, advance: 4, passing_target: 1
-    },
-    buildup: {
-        tactic_intensity: 7, goal_kick_length: 1, gk_dist_speed: 7
-    },
-    defense: {
-        press_line: 6, defensive_line: 6, line_behavior: 7, press_frequency: 7,
-        transition: 7, tackling: 4, press_trap: 4, gk_short_dist: 7,
-        cross_defense: 4, block_style_level: 4
-    },
-    defense_priority: { type: "Box", intensity: 7 }
+// 1. 환경 객체 (공의 상태)
+let ball = {
+    x: 350, y: 225, 
+    speedX: 0, speedY: 0,
+    owner: null,
+    xg: 0 // 골키퍼가 판단할 xG 수치
 };
 
-// 2. UI 자동 생성 로직
-function createSliders() {
-    for (let category in tactics) {
-        if (category === 'defense_priority') continue;
-        const container = document.getElementById(`${category}-controls`);
-        for (let key in tactics[category]) {
-            if (typeof tactics[category][key] !== 'number') continue;
-            
-            const div = document.createElement('div');
-            div.className = 'control';
-            div.innerHTML = `
-                <label>${key} <span id="${category}-${key}-val">${tactics[category][key]}</span></label>
-                <input type="range" min="1" max="7" value="${tactics[category][key]}" 
-                       oninput="updateVal('${category}', '${key}', this.value)">
-            `;
-            container.appendChild(div);
+// 2. 선수 생성 (우리 팀 A, 적 팀 B)
+let players = [];
+
+function initMatch() {
+    // 우리 팀 (파란색) + 골키퍼
+    players.push(new Player(0, 50, 225, 'A', true)); // GK
+    for(let i=1; i<=10; i++) players.push(new Player(i, 200, 40 * i + 20, 'A'));
+
+    // 적 팀 (빨간색) + 적 골키퍼
+    players.push(new Player(11, 650, 225, 'B', true)); // Enemy GK
+    for(let i=1; i<=10; i++) players.push(new Player(i+11, 500, 40 * i + 20, 'B'));
+}
+
+// 3. Player 클래스의 update 로직 (공과 적에 반응)
+Player.prototype.update = function() {
+    // [공 추적 로직]
+    // 전술의 'press_frequency(압박 빈도)'가 높을수록 공에 더 집착함
+    let targetX = ball.x;
+    let targetY = ball.y;
+
+    // 만약 적 팀이라면 우리 골대 쪽으로 공을 몰고 옴
+    if (this.team === 'B') {
+        this.x -= 0.5; // 기본적으로 왼쪽(우리 골대)으로 전진
+    }
+
+    // 공과의 거리 계산
+    let dx = targetX - this.x;
+    let dy = targetY - this.y;
+    let dist = Math.hypot(dx, dy);
+
+    // 수비 전술: press_line(압박 라인) 단계에 따라 반응 범위 결정
+    let reactionLimit = tactics.defense.press_line * 50; 
+
+    if (dist < reactionLimit) {
+        // 공을 향해 이동 (능력치 75 반영하여 속도 조절)
+        let speed = (75 / 100) * (tactics.defense.press_frequency * 0.5);
+        this.x += (dx / dist) * speed;
+        this.y += (dy / dist) * speed;
+    }
+
+    // [골키퍼 전용 4단계 로직 적용]
+    if (this.isGK) {
+        // 1단계: 공이 우리 진영으로 오고 xG가 높을 때 (가상 xG 계산)
+        ball.xg = (this.team === 'A' && ball.x < 150) ? 0.2 : 0.01;
+        
+        if (ball.xg >= 0.15) {
+            // 적의 정면을 막기 위해 y축 정렬
+            this.y += (ball.y - this.y) * 0.1;
         }
     }
-}
+};
 
-function updateVal(cat, key, val) {
-    tactics[cat][key] = parseInt(val);
-    document.getElementById(`${cat}-${key}-val`).innerText = val;
-}
-
-function updatePriorityType(val) { tactics.defense_priority.type = val; }
-function updatePriorityInt(val) { tactics.defense_priority.intensity = parseInt(val); }
-
-// 3. 선수 AI 및 렌더링 (모든 스탯 75)
-class Player {
-    constructor(id, x, y, team, isGK = false) {
-        this.id = id; this.x = x; this.y = y; this.team = team; this.isGK = isGK;
-        this.baseStat = 75;
-    }
-
-    update() {
-        // [유저 설계 로직 연동 예시]
-        // 압박 빈도가 높으면(7단계) 공 근처로 더 빠르게 이동
-        const speed = 0.5 + (tactics.defense.press_frequency * 0.2);
-        this.x += (Math.random() - 0.5) * speed;
-        this.y += (Math.random() - 0.5) * speed;
-    }
-
-    draw(ctx) {
-        ctx.fillStyle = this.isGK ? "#ffeb3b" : (this.team === 'A' ? "#2196F3" : "#f44336");
-        ctx.beginPath(); ctx.arc(this.x, this.y, 8, 0, Math.PI*2); ctx.fill();
-        ctx.fillStyle = "white"; ctx.font = "10px Arial";
-        ctx.fillText(this.isGK ? "GK" : "75", this.x-5, this.y-12);
-    }
-}
-
-// 초기화 및 루프
-const canvas = document.getElementById('field');
-const ctx = canvas.getContext('2d');
-const players = [new Player(0, 50, 225, 'A', true)]; // GK
-for(let i=1; i<11; i++) players.push(new Player(i, 100 + i*50, 100 + (i%3)*100, 'A'));
-
-function animate() {
+// 4. 애니메이션 루프에 공 그리기 추가
+function draw() {
     ctx.clearRect(0, 0, 700, 450);
-    // 중앙선/박스 그리기
-    ctx.strokeStyle = "rgba(255,255,255,0.3)";
-    ctx.beginPath(); ctx.moveTo(350,0); ctx.lineTo(350,450); ctx.stroke();
     
-    players.forEach(p => { p.update(); p.draw(ctx); });
-    requestAnimationFrame(animate);
+    // 경기장 선
+    ctx.strokeStyle = "rgba(255,255,255,0.5)";
+    ctx.strokeRect(0, 0, 700, 450);
+
+    // 선수들 그리기
+    players.forEach(p => {
+        p.update();
+        p.draw(ctx);
+    });
+
+    // 공 그리기
+    ctx.fillStyle = "white";
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, 5, 0, Math.PI*2);
+    ctx.fill();
+
+    // 공의 무작위 움직임 (테스트용)
+    ball.x += (Math.random() - 0.5) * 2;
+    ball.y += (Math.random() - 0.5) * 2;
+
+    requestAnimationFrame(draw);
 }
 
-createSliders();
-animate();
+initMatch();
+draw();
