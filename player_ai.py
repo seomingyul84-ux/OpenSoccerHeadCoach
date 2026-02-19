@@ -1,43 +1,46 @@
-import math
 import random
 
 class Player:
-    def __init__(self, id, name, stats):
-        self.id = id
-        self.name = name
-        self.stats = stats # FC26 데이터 연결
+    def __init__(self, player_id):
+        self.id = player_id
+        # 테스트를 위해 모든 능력치를 75로 통일
+        self.stats = {stat: 75 for stat in ['vision', 'finishing', 'passing', 'aggression']}
         self.pos = [0, 0]
 
     def decide(self, env, te):
-        """필드 플레이어 의사결정 (xG 판단 -> 마킹 확인 -> 확률 행동)"""
         has_ball = env['owner_id'] == self.id
+        
         if has_ball:
-            # 1. xG 0.25 이상 슈팅 판단
-            if self._calculate_xg(env) >= 0.25:
-                # 전술 '참을성' 반영
-                shoot_prob = 0.6 if te.attack['patience'] == "calm_chance" else 0.95
-                if random.random() < shoot_prob: return "SHOOT"
-            # 2. 패스/드리블 판단
-            pass_prob = 0.9 if te.attack['dribble_focus'] == "restrain" else 0.5
+            # [전술 연동] 참을성(patience) 7단계: 높을수록 xG 컷트라인이 올라감
+            # 모든 선수가 75이므로, 전술 수치가 행동의 유일한 변수
+            shoot_threshold = 0.5 - (te.attack['patience'] * 0.05) 
+            if env['xg'] >= shoot_threshold:
+                return "SHOOT"
+
+            # [전술 연동] 드리블 자제(dribble_focus) 1단계: 낮을수록 패스 우선
+            pass_prob = 1.0 - (te.attack['dribble_focus'] * 0.1)
             return "PASS" if random.random() < pass_prob else "DRIBBLE"
-        return "DEFEND"
+        
+        else:
+            # [수비] 게겐프레싱 7단계: 즉시 압박 실행
+            if te.defense['transition'] >= 6 and env['seconds_since_loss'] < 5:
+                return "COUNTER_PRESS"
+            return f"DEFEND_{te.defense_priority['type']}_LEVEL_{te.defense_priority['intensity']}"
 
 class Goalkeeper:
-    def __init__(self, id, name, stats):
+    def __init__(self, id):
         self.id = id
-        self.name = name
-        self.stats = stats
-        self.pos = [5, 34]
-
+        self.stats = {stat: 75 for stat in ['reflexes', 'kicking', 'positioning']}
+        
     def decide(self, env, te):
-        """유저 설계 골키퍼 매커니즘 (위협 -> 소유 -> 아군소유 여부)"""
-        # 1. 근처 xG 0.15 이상 선수가 있는가?
-        if self._find_danger(env, 0.15): return "BLOCK_FACE"
-        # 2. 내가 볼을 가졌는가?
-        if env['ball_owner_id'] == self.id: return "TACTICAL_PASS"
-        # 3. 아군이 볼을 가졌는가?
+        # 유저 설계 4단계 매커니즘
+        # 1. 위협 감지
+        if env['xg'] >= 0.15: return "BLOCK_FACE"
+        # 2. 소유 시
+        if env['ball_owner_id'] == self.id: return f"PASS_{te.buildup['gk_dist_target']}"
+        # 3. 아군 소유 시
         if env['teammate_has_ball']:
-            # 4. 스위퍼 키퍼 여부 (라인 행동과 연동)
-            if te.defense['line_behavior'] == 'step_up': return "JOIN_BUILDUP"
+            # 4. 스위퍼 키퍼 가담 (라인 행동 7단계 시)
+            if te.defense['line_behavior'] >= 6: return "JOIN_BUILDUP"
             return "STAY_IN_GOAL"
         return "STAY_IN_GOAL"
